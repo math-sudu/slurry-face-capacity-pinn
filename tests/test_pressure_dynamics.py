@@ -18,6 +18,30 @@ from pressure_dynamics import DynamicPINN, restore_dynamic_model, run_dynamic
 
 
 class PressureDynamicsTests(unittest.TestCase):
+    def test_velocity_predictor_changes_only_outputs_and_preserves_accepted_state(self):
+        system = ChannelSystem(FractureProblem(step_time_s=.002), .12, control='mean_pressure')
+        model = DynamicPINN(system, center_spacing=.18, trace_enrichment=True)
+        net = model.network
+        rng = np.random.default_rng(401)
+        net.parameters[:] = rng.normal(0, .0001, net.nparameter)
+        state, basis = net.evaluate(net.parameters, True)
+        system.state = state.copy()
+        model.displacement_old = state[model.mechanical] * system.b.displacement_scale_m
+        output = net.output_parameters
+        weights = rng.normal(0, .00001, len(output))
+        model.velocity_old = basis[model.mechanical][:, output] @ weights
+        old_parameters = net.parameters.copy()
+        old_state, old_water = system.state.copy(), system.water_old.clone()
+        target = model.displacement_old + system.b.step_time_s * model.velocity_old
+        with threadpool_limits(limits=2):
+            model.predict_displacement()
+        predicted = net.evaluate(net.parameters)[model.mechanical] * system.b.displacement_scale_m
+        np.testing.assert_allclose(predicted, target, atol=1.e-12)
+        hidden = slice(net.outputs, net.outputs + net.hidden)
+        np.testing.assert_array_equal(net.parameters[hidden], old_parameters[hidden])
+        np.testing.assert_array_equal(system.state, old_state)
+        np.testing.assert_array_equal(system.water_old, old_water)
+
     def test_inertia_tangent_includes_hidden_features_and_has_physical_mass(self):
         torch.set_num_threads(2)
         s = ChannelSystem(FractureProblem(step_time_s=.002), .12, control='mean_pressure')
@@ -92,12 +116,14 @@ class PressureDynamicsTests(unittest.TestCase):
             source = root/'source'
             run(FractureProblem(step_time_s=.2, fracture_retention='capillary_bridge'), source, 1, .12, .18, .00002, .2,
                 learn_radii=False, channel=True, pressure_step_pa=1100., hold_time_s=.4)
-            kwargs = dict(directory=source, step=2, pressure_pa=2200., dt=.002, max_iterations=0)
+            kwargs = dict(directory=source, step=2, pressure_pa=2200., dt=.002, max_iterations=0,
+                          predict_velocity=True)
             first = run_dynamic(output=root/'resumed', duration_s=.002, **kwargs)
             checkpoint = (root/'resumed'/first['checkpoint']).read_bytes()
             resumed = run_dynamic(output=root/'resumed', duration_s=.004, resume=True, **kwargs)
             self.assertEqual(resumed['problem']['fracture_retention'], 'capillary_bridge')
             self.assertEqual(resumed['settings']['fracture_retention'], 'capillary_bridge')
+            self.assertTrue(resumed['settings']['predict_velocity'])
             whole = run_dynamic(output=root/'whole', duration_s=.004, **kwargs)
             self.assertEqual(checkpoint, (root/'resumed'/first['checkpoint']).read_bytes())
             with np.load(root/'resumed'/resumed['checkpoint']) as actual, np.load(root/'whole'/whole['checkpoint']) as expected:
@@ -113,7 +139,8 @@ class PressureDynamicsTests(unittest.TestCase):
             self.assertAlmostEqual(observations[-1]['bulk_tensile_plastic_volume_ml_per_m']+
                                    observations[-1]['bulk_shear_dilation_ml_per_m'],
                                    observations[-1]['bulk_plastic_volume_ml_per_m'], places=8)
-            branch = run_dynamic(root/'whole', 1, root/'branch', 2200., .002, .002, max_iterations=0)
+            branch = run_dynamic(root/'whole', 1, root/'branch', 2200., .002, .002,
+                                 max_iterations=0, predict_velocity=True)
             self.assertEqual(branch['initial_velocity'], 'source_checkpoint')
             with np.load(root/'branch'/branch['checkpoint']) as actual, np.load(root/'whole'/whole['checkpoint']) as expected:
                 np.testing.assert_allclose(actual['velocity_m_s'], expected['velocity_m_s'], atol=1.e-10)

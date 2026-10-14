@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 
 import numpy as np
+from scipy.linalg import lstsq
 import torch
 from threadpoolctl import threadpool_limits
 
@@ -36,6 +37,15 @@ class DynamicPINN(ConservativePINN):
         velocity = (displacement-self.displacement_old)/dt
         acceleration = (velocity-self.velocity_old)/dt
         return velocity, acceleration
+
+    def predict_displacement(self):
+        """Fit the constant-velocity trial in the current neural output space."""
+        net, s = self.network, self.system
+        state, basis = net.evaluate(net.parameters, True)
+        target = (self.displacement_old + s.b.step_time_s * self.velocity_old) / s.b.displacement_scale_m
+        output = net.output_parameters
+        net.parameters[output] += lstsq(basis[self.mechanical][:, output],
+            target - state[self.mechanical], cond=1.e-9, lapack_driver='gelsy')[0]
 
     def forces(self, state, residual):
         return super().forces(state, residual)+self.mass*self.kinematics(state)[1]
@@ -120,7 +130,8 @@ def restore_dynamic_model(directory, checkpoint, dt):
 
 
 def run_dynamic(directory, step, output, pressure_pa, duration_s, dt,
-                max_iterations=1, resume=False, stop_surface_opening=False):
+                max_iterations=1, resume=False, stop_surface_opening=False,
+                predict_velocity=False):
     if not np.isfinite([pressure_pa, duration_s, dt]).all() or min(pressure_pa, duration_s, dt) <= 0:
         raise ValueError('Pressure, duration and time step must be positive')
     directory, output = Path(directory), Path(output)
@@ -130,6 +141,8 @@ def run_dynamic(directory, step, output, pressure_pa, duration_s, dt,
         result = json.loads((output/'result.json').read_text(encoding='utf-8'))
         if result['source'] != source or result['settings']['target_pressure_pa'] != pressure_pa or result['settings']['dt_s'] != dt or result['settings']['max_iterations'] != max_iterations:
             raise ValueError('Resume differs from saved source or evolution settings')
+        if result['settings'].get('predict_velocity', False) != predict_velocity:
+            raise ValueError('Resume differs from the saved displacement predictor')
         if stop_surface_opening and result.get('stop_reason') == 'surface_opening':
             return result
         model, _ = restore_dynamic_model(output, result['checkpoint'], dt)
@@ -140,6 +153,7 @@ def run_dynamic(directory, step, output, pressure_pa, duration_s, dt,
         settings.update(time_integrator='backward_euler', mass='initial_bulk_density_lumped',
             target_pressure_pa=pressure_pa, dt_s=dt, max_iterations=max_iterations,
             stop_surface_opening=stop_surface_opening)
+        settings['predict_velocity'] = predict_velocity
         settings.pop('hold_time_s', None)
         settings.pop('pressure_step_pa', None)
         result = {'kind': 'dynamic_pressure_neural_fracture', 'source': source,
@@ -158,6 +172,8 @@ def run_dynamic(directory, step, output, pressure_pa, duration_s, dt,
             s.b = replace(s.b, step_time_s=min(advance, finish-s.time_s))
             saved_state, saved_parameters = s.state.copy(), net.parameters.copy()
             try:
+                if predict_velocity:
+                    model.predict_displacement()
                 training = model.train(max_iterations)
             except ArithmeticError as error:
                 s.state, net.parameters = saved_state, saved_parameters
@@ -216,10 +232,12 @@ def main():
     parser.add_argument('--max-iterations', type=int, default=1)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--stop-surface-opening', action='store_true')
+    parser.add_argument('--predict-velocity', action='store_true',
+                        help='Initialize output equilibrium with a constant-velocity neural field')
     args = parser.parse_args()
     run_dynamic(args.directory, args.step, args.output, args.pressure_pa,
                 args.duration, args.dt, args.max_iterations, args.resume,
-                args.stop_surface_opening)
+                args.stop_surface_opening, args.predict_velocity)
 
 
 if __name__ == '__main__':

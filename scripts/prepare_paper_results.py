@@ -6,13 +6,13 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FINAL = ROOT / 'results/ideation/channel_bridge_25_propagation_dt0005'
+FINAL = ROOT / 'results/ideation/channel_bridge_25_filling'
 OUTPUT = ROOT / 'results/paper_data'
 
 
-def read_path():
+def read_path(final=None):
     """Follow checkpoint links, excluding later rows of a shortened ancestor."""
-    directory, last_step = FINAL, None
+    directory, last_step = Path(FINAL if final is None else final).resolve(), None
     segments = []
     while True:
         source_file = directory / 'result.json'
@@ -81,6 +81,7 @@ def main():
                'open_path_to_surface', 'connected_surface_outflow', 'step_time_s',
                'source_directory', 'checkpoint']
     retained = [r for r in rows if r['time_s'] >= 120 - 1e-8]
+    write_csv('loading_response.csv', rows, columns)
     write_csv('accepted_path.csv', retained, columns)
     stages = []
     for pressure in (7.5, 10, 12.5, 15, 17.5, 20, 22.5):
@@ -95,7 +96,10 @@ def main():
             'checkpoint': end['checkpoint']})
     write_csv('pressure_holds.csv', stages, list(stages[0]))
     selected = []
-    for time in (480, 540, 540.030, 540.038, 540.070, 540.071):
+    selected_times = [480, 540, 540.030, 540.038, 540.070, 540.071]
+    if all(abs(retained[-1]['time_s'] - time) >= 1.e-8 for time in selected_times):
+        selected_times.append(retained[-1]['time_s'])
+    for time in selected_times:
         match = [r for r in retained if abs(r['time_s']-time) < 1e-8]
         if len(match) != 1:
             raise ValueError(f'Expected one accepted state at {time}, found {len(match)}')
@@ -133,7 +137,7 @@ def main():
     print(f"Final face displacement: {last['mean_face_displacement_mm']:.6f} mm")
     print(f'120 s to final water balance: supply={supplied:.6f}, storage={stored:.6f}, '
           f'sweep={swept:.6f}, outflow={outflow:.6f}, difference={supplied-stored-swept-outflow:.3g} mL/m')
-    print('Wrote accepted_path.csv, pressure_holds.csv, selected_states.csv, reported_data.json, pressure_holds.tex')
+    print('Wrote loading_response.csv, accepted_path.csv, pressure_holds.csv, selected_states.csv, reported_data.json, pressure_holds.tex')
 
 
 if __name__ == '__main__':

@@ -36,11 +36,13 @@ def main():
     parser.add_argument('--smoke', action='store_true')
     parser.add_argument('--output', type=Path, default=ROOT / 'results/ideation')
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--through-segment', type=int, default=46)
+    parser.add_argument('--through-segment', type=int)
     args = parser.parse_args()
     config = json.loads((ROOT / 'config/paper_case.json').read_text(encoding='utf-8'))
     problem = FractureProblem(**config['problem'])
     segments = config['segments']
+    if args.through_segment is None:
+        args.through_segment = len(segments)-1
     if not 0 <= args.through_segment < len(segments):
         parser.error('--through-segment must select a segment in the configured protocol')
     if args.dry_run:
@@ -63,7 +65,8 @@ def main():
             source_result = json.loads((previous / 'result.json').read_text(encoding='utf-8'))
             result = run_dynamic(previous, source_result['history'][-1]['step'], output,
                                  segment['pressure_pa'], segment['duration_s'],
-                                 segment['dt_s'], max_iterations=1, resume=resume)
+                                 segment['dt_s'], max_iterations=1, resume=resume,
+                                 predict_velocity=segment.get('predict_velocity', False))
         rows = path_observations(output)
         with (output / 'observations.csv').open('w', encoding='utf-8', newline='') as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))

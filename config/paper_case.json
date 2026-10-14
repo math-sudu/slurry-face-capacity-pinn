@@ -64,7 +64,7 @@
     "pressure_profile": "initial_geostatic_plus_uniform_surcharge",
     "trace_enrichment": true
   },
-  "final_time_s": 540.071,
+  "final_time_s": 540.0724375,
   "segments": [
     {
       "name": "channel_bridge_pressure",
@@ -347,6 +347,19 @@
       "pressure_pa": 25000.0,
       "duration_s": 0.001,
       "dt_s": 0.0005
+    },
+    {
+      "name": "channel_bridge_25_postdebond",
+      "pressure_pa": 25000.0,
+      "duration_s": 0.000875,
+      "dt_s": 0.00025
+    },
+    {
+      "name": "channel_bridge_25_filling",
+      "pressure_pa": 25000.0,
+      "duration_s": 0.0005625,
+      "dt_s": 0.000125,
+      "predict_velocity": true
     }
   ]
 }
